@@ -1,3 +1,24 @@
+# Fork: Zed Extended
+
+This is a fork of Zed renamed to "Zed Extended" with a separate macOS identity so it can coexist with upstream Zed.
+
+## Fork documentation (`mturley-fork-meta/`)
+
+The `mturley-fork-meta/` folder documents every fork-specific modification. This is critical because upstream rebases will be conflict-heavy, and we may need to reimplement features from scratch when upstream makes large changes.
+
+**Rules:**
+- When adding or modifying a fork-specific feature, create or update a feature-specific markdown file in `mturley-fork-meta/` (e.g. `mturley-fork-meta/thread-rename.md`, `mturley-fork-meta/pr-linking.md`).
+- Each feature doc should describe: what the feature does, which files are changed and why, key structs/functions involved, and how to verify it works.
+- The `mturley-fork-meta/README.md` is the index — keep it updated with a summary of all features and the fork identity changes.
+- These docs exist so a future session (or a human) can reimplement the feature after a destructive rebase using only the docs as a guide.
+
+## Building and testing
+
+- Build and install locally: `script/bundle-mac -do` (debug, opens app when done)
+- Release build to /Applications: `script/bundle-mac -i`
+- The `-d` flag enables incremental compilation for fast iteration
+- Code signing warnings are expected without Apple developer certificates
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.

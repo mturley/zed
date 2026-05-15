@@ -2,6 +2,8 @@
 
 This folder tracks the purpose and design of changes made in this fork of Zed, making them easier to understand and retain across rebases onto upstream.
 
+Each feature has its own markdown file with enough detail to reimplement it from scratch if a rebase destroys the changes.
+
 ## Fork Identity
 
 The fork is renamed to "Zed Extended" with a separate macOS bundle identifier (`dev.zed.Zed-Extended-*`) and separate data directories (`~/Library/Application Support/Zed Extended/` on macOS). This allows it to coexist alongside upstream Zed.
@@ -12,12 +14,7 @@ The fork is renamed to "Zed Extended" with a separate macOS bundle identifier (`
 - `crates/zed/Cargo.toml` — Bundle names/identifiers/URL schemes
 - `crates/zed/src/zed/app_menus.rs` — Menu labels (About, Hide, Quit)
 
-## Goals
+## Features
 
-1. **Rename/annotate threads** — Custom names or annotations on agent threads that persist, so threads are distinguishable beyond auto-generated titles.
-
-2. **Link threads to PRs** — If a thread's worktree has a branch with an open PR, show a link to that PR in the sidebar with metadata (repo, author, merge status, CI status).
-
-## Architecture Notes
-
-See the plan file for a map of the relevant source files and data flow.
+1. **Message preview subtitle** — shows the first message of each thread in the sidebar (#2)
+2. **PR linking in sidebar** — see `pr-linking.md` (#4)
