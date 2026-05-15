@@ -5777,7 +5777,7 @@ fn all_thread_infos_for_workspace(
                         if text.is_empty() {
                             None
                         } else {
-                            Some(text)
+                            Some(("You: ", text))
                         }
                     }
                     AgentThreadEntry::AssistantMessage(message) => {
@@ -5787,7 +5787,7 @@ fn all_thread_infos_for_workspace(
                                 if text.is_empty() {
                                     None
                                 } else {
-                                    Some(text)
+                                    Some(("Agent: ", text))
                                 }
                             }
                             _ => None,
@@ -5795,11 +5795,13 @@ fn all_thread_infos_for_workspace(
                     }
                     _ => None,
                 })
-                .map(|text| {
-                    let truncated = if text.len() > 100 {
-                        format!("{}...", &text[..text.floor_char_boundary(100)])
+                .map(|(prefix, text)| {
+                    let trimmed = text.trim().replace('\n', " ");
+                    let prefixed = format!("{prefix}{trimmed}");
+                    let truncated = if prefixed.len() > 100 {
+                        format!("{}...", &prefixed[..prefixed.floor_char_boundary(100)])
                     } else {
-                        text.to_string()
+                        prefixed
                     };
                     SharedString::from(truncated)
                 });
