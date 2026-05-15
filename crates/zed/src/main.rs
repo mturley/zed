@@ -4,15 +4,9 @@
 mod reliability;
 mod zed;
 
-// Ensure the binary name stays in sync with APP_NAME so that the paths used
-// at runtime (data dir, config dir, etc.) match what the binary is called.
-const _: () = assert!(
-    paths::APP_NAME_LOWERCASE
-        .as_bytes()
-        .eq_ignore_ascii_case(env!("CARGO_BIN_NAME").as_bytes()),
-    "paths::APP_NAME_LOWERCASE must match the binary name. \
-     Forks: update APP_NAME in crates/paths/src/paths.rs when renaming the binary.",
-);
+// In upstream Zed this assertion ensures APP_NAME stays in sync with the
+// binary name.  This fork uses "Zed Extended" as APP_NAME (for separate
+// data dirs) while keeping the binary named "zed", so the check is skipped.
 
 use agent::{SharedThread, ThreadStore};
 use agent_client_protocol::schema as acp;
