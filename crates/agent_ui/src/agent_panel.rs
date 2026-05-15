@@ -35,6 +35,7 @@ use crate::ManageProfiles;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::completion_provider::AgentContextSource;
 use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore, ThreadMetadataStoreEvent};
+use crate::DEFAULT_THREAD_TITLE;
 use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, Follow,
     InlineAssistant, LoadThreadFromClipboard, NewThread, OpenActiveThreadAsMarkdown, OpenAgentDiff,
@@ -827,6 +828,9 @@ pub struct AgentPanel {
     _thread_metadata_store_subscription: Subscription,
     last_context_source: Option<AgentContextSource>,
 
+    acp_title_editor: Entity<Editor>,
+    _acp_title_editor_subscription: Subscription,
+
     is_active: bool,
 }
 
@@ -1049,7 +1053,7 @@ impl AgentPanel {
     pub(crate) fn new(
         workspace: &Workspace,
         prompt_store: Option<Entity<PromptStore>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let fs = workspace.app_state().fs.clone();
@@ -1123,6 +1127,19 @@ impl AgentPanel {
             },
         );
 
+        let acp_title_editor = cx.new(|cx| {
+            let mut editor = Editor::single_line(window, cx);
+            editor.set_text(DEFAULT_THREAD_TITLE, window, cx);
+            editor
+        });
+        let _acp_title_editor_subscription = cx.subscribe_in(
+            &acp_title_editor,
+            window,
+            |this, title_editor, event: &editor::EditorEvent, window, cx| {
+                this.handle_acp_title_editor_event(&title_editor, event, window, cx);
+            },
+        );
+
         let mut panel = Self {
             workspace_id,
             base_view,
@@ -1160,6 +1177,8 @@ impl AgentPanel {
             _active_draft_reclaim_observation: None,
             _thread_metadata_store_subscription,
             last_context_source: None,
+            acp_title_editor,
+            _acp_title_editor_subscription,
             is_active: false,
         };
 
@@ -1846,6 +1865,62 @@ impl AgentPanel {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn handle_acp_title_editor_event(
+        &mut self,
+        title_editor: &Entity<Editor>,
+        event: &editor::EditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            editor::EditorEvent::BufferEdited => {
+                if !title_editor.read(cx).is_focused(window) {
+                    return;
+                }
+                let Some(thread_id) = self.active_thread_id(cx) else {
+                    return;
+                };
+                let new_title = title_editor.read(cx).text(cx);
+                if new_title.is_empty() {
+                    return;
+                }
+                let title = SharedString::from(new_title);
+                if let Some(store) = ThreadMetadataStore::try_global(cx) {
+                    store.update(cx, |store, cx| {
+                        store.set_title_override(thread_id, title, cx);
+                    });
+                }
+            }
+            editor::EditorEvent::Blurred => {
+                if title_editor.read(cx).text(cx).is_empty() {
+                    if let Some(thread_id) = self.active_thread_id(cx) {
+                        if let Some(store) = ThreadMetadataStore::try_global(cx) {
+                            store.update(cx, |store, cx| {
+                                store.clear_title_override(thread_id, cx);
+                            });
+                        }
+                    }
+                    self.sync_acp_title_editor(window, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn sync_acp_title_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self
+            .active_conversation_view()
+            .map(|cv| cv.read(cx).title(cx))
+            .unwrap_or_else(|| DEFAULT_THREAD_TITLE.into());
+
+        let editor_text = self.acp_title_editor.read(cx).text(cx);
+        if editor_text != title.as_ref() {
+            self.acp_title_editor.update(cx, |editor, cx| {
+                editor.set_text(title.to_string(), window, cx);
+            });
         }
     }
 
@@ -3223,6 +3298,7 @@ impl AgentPanel {
         }
 
         self.refresh_base_view_subscriptions(window, cx);
+        self.sync_acp_title_editor(window, cx);
 
         if focus {
             self.focus_handle(cx).focus(window, cx);
@@ -3276,6 +3352,9 @@ impl AgentPanel {
                     this._thread_view_subscription =
                         Self::subscribe_to_active_thread_view(&server_view, window, cx);
                     this.observe_active_draft_for_empty_editor(&server_view, cx);
+                    if !this.acp_title_editor.read(cx).is_focused(window) {
+                        this.sync_acp_title_editor(window, cx);
+                    }
                     cx.emit(AgentPanelEvent::ActiveViewChanged);
                     this.serialize(cx);
                     cx.notify();
@@ -3943,7 +4022,8 @@ impl AgentPanel {
             VisibleSurface::AgentThread(conversation_view) => conversation_view
                 .read(cx)
                 .root_thread_view()
-                .is_some_and(|view| view.read(cx).title_editor.read(cx).is_focused(window)),
+                .map(|view| view.read(cx).title_editor.read(cx).is_focused(window))
+                .unwrap_or_else(|| self.acp_title_editor.read(cx).is_focused(window)),
             VisibleSurface::Terminal(_) => self
                 .active_terminal_id()
                 .and_then(|id| self.terminals.get(&id))
@@ -4028,9 +4108,26 @@ impl AgentPanel {
                         }
                     }
                 } else {
-                    Label::new(conversation_view.read(cx).title(cx))
-                        .color(Color::Muted)
-                        .truncate()
+                    div()
+                        .flex_1()
+                        .w_full()
+                        .on_action({
+                            let conversation_view = conversation_view.downgrade();
+                            move |_: &menu::Confirm, window, cx| {
+                                if let Some(conversation_view) = conversation_view.upgrade() {
+                                    conversation_view.focus_handle(cx).focus(window, cx);
+                                }
+                            }
+                        })
+                        .on_action({
+                            let conversation_view = conversation_view.downgrade();
+                            move |_: &editor::actions::Cancel, window, cx| {
+                                if let Some(conversation_view) = conversation_view.upgrade() {
+                                    conversation_view.focus_handle(cx).focus(window, cx);
+                                }
+                            }
+                        })
+                        .child(self.acp_title_editor.clone())
                         .into_any_element()
                 }
             }
