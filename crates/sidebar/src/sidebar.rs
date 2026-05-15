@@ -1,6 +1,6 @@
 mod thread_switcher;
 
-use acp_thread::ThreadStatus;
+use acp_thread::{AgentThreadEntry, AssistantMessageChunk, ThreadStatus};
 use action_log::DiffStats;
 use agent_client_protocol::schema as acp;
 use agent_settings::AgentSettings;
@@ -191,6 +191,7 @@ struct ActiveThreadInfo {
     is_background: bool,
     is_title_generating: bool,
     diff_stats: DiffStats,
+    message_preview: Option<SharedString>,
 }
 
 #[derive(Clone)]
@@ -231,6 +232,7 @@ struct ThreadEntry {
     highlight_positions: Vec<usize>,
     worktrees: Vec<ThreadItemWorktreeInfo>,
     diff_stats: DiffStats,
+    message_preview: Option<SharedString>,
 }
 
 #[derive(Clone)]
@@ -259,6 +261,7 @@ impl ThreadEntry {
         self.is_background = info.is_background;
         self.is_title_generating = info.is_title_generating;
         self.diff_stats = info.diff_stats;
+        self.message_preview = info.message_preview.clone();
     }
 }
 
@@ -1285,6 +1288,7 @@ impl Sidebar {
                             highlight_positions: Vec::new(),
                             worktrees,
                             diff_stats: DiffStats::default(),
+                            message_preview: None,
                         }
                     };
 
@@ -4430,6 +4434,9 @@ impl Sidebar {
             .timestamp(timestamp)
             .highlight_positions(thread.highlight_positions.to_vec())
             .title_generating(thread.is_title_generating)
+            .when_some(thread.message_preview.clone(), |this, preview| {
+                this.message_preview(preview)
+            })
             .notified(has_notification)
             .when(thread.diff_stats.lines_added > 0, |this| {
                 this.added(thread.diff_stats.lines_added as usize)
@@ -5760,6 +5767,45 @@ fn all_thread_infos_for_workspace(
 
             let diff_stats = thread.action_log().read(cx).diff_stats(cx);
 
+            let message_preview = thread
+                .entries()
+                .iter()
+                .rev()
+                .find_map(|entry| match entry {
+                    AgentThreadEntry::UserMessage(message) => {
+                        let text = message.content.to_markdown(cx);
+                        if text.is_empty() {
+                            None
+                        } else {
+                            Some(("You: ", text))
+                        }
+                    }
+                    AgentThreadEntry::AssistantMessage(message) => {
+                        message.chunks.iter().find_map(|chunk| match chunk {
+                            AssistantMessageChunk::Message { block } => {
+                                let text = block.to_markdown(cx);
+                                if text.is_empty() {
+                                    None
+                                } else {
+                                    Some(("Agent: ", text))
+                                }
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                })
+                .map(|(prefix, text)| {
+                    let trimmed = text.trim().replace('\n', " ");
+                    let prefixed = format!("{prefix}{trimmed}");
+                    let truncated = if prefixed.len() > 100 {
+                        format!("{}...", &prefixed[..prefixed.floor_char_boundary(100)])
+                    } else {
+                        prefixed
+                    };
+                    SharedString::from(truncated)
+                });
+
             Some(ActiveThreadInfo {
                 session_id,
                 title,
@@ -5769,6 +5815,7 @@ fn all_thread_infos_for_workspace(
                 is_background,
                 is_title_generating,
                 diff_stats,
+                message_preview,
             })
         });
 
