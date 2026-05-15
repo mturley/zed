@@ -702,6 +702,25 @@ impl ThreadMetadataStore {
         self.save(metadata, cx);
     }
 
+    /// Clear the user-supplied title override for a thread.
+    pub fn clear_title_override(
+        &mut self,
+        thread_id: ThreadId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(existing) = self.entry(thread_id) else {
+            return;
+        };
+        if existing.title_override.is_none() {
+            return;
+        }
+        let metadata = ThreadMetadata {
+            title_override: None,
+            ..existing.clone()
+        };
+        self.save(metadata, cx);
+    }
+
     fn save_internal(&mut self, metadata: ThreadMetadata) {
         if let Some(thread) = self.threads.get(&metadata.thread_id) {
             if thread.folder_paths() != metadata.folder_paths() {
