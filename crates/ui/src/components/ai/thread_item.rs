@@ -54,6 +54,7 @@ pub struct ThreadItem {
     project_paths: Option<Arc<[PathBuf]>>,
     project_name: Option<SharedString>,
     worktrees: Vec<ThreadItemWorktreeInfo>,
+    message_preview: Option<SharedString>,
     is_remote: bool,
     archived: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
@@ -86,6 +87,7 @@ impl ThreadItem {
             project_paths: None,
             project_name: None,
             worktrees: Vec::new(),
+            message_preview: None,
             is_remote: false,
             archived: false,
             on_click: None,
@@ -177,6 +179,11 @@ impl ThreadItem {
 
     pub fn worktrees(mut self, worktrees: Vec<ThreadItemWorktreeInfo>) -> Self {
         self.worktrees = worktrees;
+        self
+    }
+
+    pub fn message_preview(mut self, preview: impl Into<SharedString>) -> Self {
+        self.message_preview = Some(preview.into());
         self
     }
 
@@ -436,6 +443,25 @@ impl RenderOnce for ThreadItem {
                         })
                     }),
             )
+            .when_some(self.message_preview.clone(), |this, preview| {
+                this.child(
+                    h_flex()
+                        .gap_1p5()
+                        .child(
+                            h_flex()
+                                .size_4()
+                                .flex_none()
+                                .invisible()
+                        )
+                        .child(
+                            Label::new(preview)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .italic()
+                                .truncate()
+                        ),
+                )
+            })
             .when(has_metadata, |this| {
                 this.child(
                     h_flex()
