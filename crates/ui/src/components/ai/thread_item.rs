@@ -1,7 +1,8 @@
 use crate::{CommonAnimationExt, DiffStat, GradientFade, HighlightedLabel, Tooltip, prelude::*};
 
 use gpui::{
-    Animation, AnimationExt, ClickEvent, Hsla, MouseButton, SharedString, pulsating_between,
+    Animation, AnimationExt, ClickEvent, FontWeight, Hsla, MouseButton, SharedString,
+    pulsating_between,
 };
 use itertools::Itertools as _;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -496,6 +497,7 @@ impl RenderOnce for ThreadItem {
             })
             .when_some(self.pr_info, |this, pr| {
                 let pr_url = pr.url.clone();
+                let pr_data = pr.clone();
                 this.child(
                     h_flex()
                         .gap_1p5()
@@ -533,6 +535,69 @@ impl RenderOnce for ThreadItem {
                                                 .color(Color::Muted)
                                         )
                                 )
+                                .tooltip(Tooltip::element(move |_window, cx| {
+                                    let state_color = if pr_data.state == "Draft" {
+                                        Color::Muted
+                                    } else {
+                                        Color::Success
+                                    };
+
+                                    v_flex()
+                                        .max_w(px(350.0))
+                                        .gap_1()
+                                        .child(
+                                            Label::new(pr_data.repo_name.clone())
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted)
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .child(
+                                                    Label::new(pr_data.title.clone())
+                                                        .weight(FontWeight::SEMIBOLD)
+                                                )
+                                                .child(
+                                                    Label::new(format!("#{}", pr_data.number))
+                                                        .color(Color::Muted)
+                                                )
+                                        )
+                                        .child(
+                                            Label::new(pr_data.state.clone())
+                                                .size(LabelSize::Small)
+                                                .color(state_color)
+                                        )
+                                        .when_some(pr_data.description.clone(), |this, desc| {
+                                            this.child(
+                                                Label::new(desc)
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted)
+                                            )
+                                        })
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .child(
+                                                    Label::new(pr_data.author_name.clone())
+                                                        .size(LabelSize::Small)
+                                                )
+                                                .child(
+                                                    Label::new("·")
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
+                                                )
+                                                .child(
+                                                    Label::new(pr_data.created_at.clone())
+                                                        .size(LabelSize::Small)
+                                                )
+                                        )
+                                        .child(
+                                            Label::new(format!("{} ← {}", pr_data.base_branch, pr_data.head_branch))
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted)
+                                        )
+                                        .into_any_element()
+                                }))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
