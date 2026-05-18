@@ -22,6 +22,31 @@ pub enum WorktreeKind {
     Linked,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ThreadItemCiStatus {
+    #[default]
+    Unknown,
+    Pass,
+    Fail,
+    Pending,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThreadItemPrInfo {
+    pub number: u32,
+    pub title: SharedString,
+    pub author_initials: SharedString,
+    pub author_name: SharedString,
+    pub ci_status: ThreadItemCiStatus,
+    pub url: SharedString,
+    pub repo_name: SharedString,
+    pub state: SharedString,
+    pub description: Option<SharedString>,
+    pub created_at: SharedString,
+    pub base_branch: SharedString,
+    pub head_branch: SharedString,
+}
+
 #[derive(Clone, Default)]
 pub struct ThreadItemWorktreeInfo {
     pub worktree_name: Option<SharedString>,
@@ -55,6 +80,7 @@ pub struct ThreadItem {
     project_name: Option<SharedString>,
     worktrees: Vec<ThreadItemWorktreeInfo>,
     message_preview: Option<SharedString>,
+    pr_info: Option<ThreadItemPrInfo>,
     is_remote: bool,
     archived: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
@@ -88,6 +114,7 @@ impl ThreadItem {
             project_name: None,
             worktrees: Vec::new(),
             message_preview: None,
+            pr_info: None,
             is_remote: false,
             archived: false,
             on_click: None,
@@ -184,6 +211,11 @@ impl ThreadItem {
 
     pub fn message_preview(mut self, preview: impl Into<SharedString>) -> Self {
         self.message_preview = Some(preview.into());
+        self
+    }
+
+    pub fn pr_info(mut self, info: ThreadItemPrInfo) -> Self {
+        self.pr_info = Some(info);
         self
     }
 
@@ -459,6 +491,54 @@ impl RenderOnce for ThreadItem {
                                 .color(Color::Muted)
                                 .italic()
                                 .truncate()
+                        ),
+                )
+            })
+            .when_some(self.pr_info, |this, pr| {
+                let pr_url = pr.url.clone();
+                this.child(
+                    h_flex()
+                        .gap_1p5()
+                        .child(
+                            h_flex()
+                                .size_4()
+                                .flex_none()
+                                .invisible()
+                        )
+                        .child(
+                            div()
+                                .id("pr-row")
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .child(
+                                            Icon::new(IconName::PullRequest)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Accent)
+                                        )
+                                        .child(
+                                            Label::new(format!("#{}", pr.number))
+                                                .size(LabelSize::Small)
+                                                .color(Color::Accent)
+                                        )
+                                        .child(
+                                            Label::new(pr.title.clone())
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted)
+                                                .truncate()
+                                        )
+                                        .child(
+                                            Label::new(pr.author_initials.clone())
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted)
+                                        )
+                                )
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .on_click(move |_, _window, cx| {
+                                    cx.open_url(&pr_url);
+                                })
                         ),
                 )
             })
