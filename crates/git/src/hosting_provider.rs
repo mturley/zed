@@ -17,6 +17,43 @@ pub struct PullRequest {
     pub url: Url,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrState {
+    Open,
+    Draft,
+    Closed,
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiStatus {
+    Pass,
+    Fail,
+    Pending,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrLabel {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullRequestInfo {
+    pub number: u32,
+    pub url: Url,
+    pub title: String,
+    pub state: PrState,
+    pub author: String,
+    pub author_avatar_url: Option<Url>,
+    pub description: Option<String>,
+    pub created_at: String,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub labels: Vec<PrLabel>,
+    pub ci_status: Option<CiStatus>,
+}
+
 #[derive(Clone)]
 pub struct GitRemote {
     pub host: Arc<dyn GitHostingProvider + Send + Sync + 'static>,
@@ -133,6 +170,15 @@ pub trait GitHostingProvider {
         _message: &str,
     ) -> Option<PullRequest> {
         None
+    }
+
+    async fn pull_requests_for_branch(
+        &self,
+        _remote: &ParsedGitRemote,
+        _branch: &str,
+        _http_client: Arc<dyn HttpClient>,
+    ) -> Result<Vec<PullRequestInfo>> {
+        Ok(Vec::new())
     }
 
     async fn commit_author_avatar_url(
