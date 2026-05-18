@@ -23,6 +23,7 @@ use agent_ui::{
     import_threads_from_other_channels,
 };
 use chrono::{DateTime, Utc};
+use client::Client;
 use editor::Editor;
 use feature_flags::{
     AgentThreadWorktreeLabel, AgentThreadWorktreeLabelFlag, FeatureFlag, FeatureFlagAppExt as _,
@@ -53,8 +54,8 @@ use theme::ActiveTheme;
 use ui::{
     AgentThreadStatus, CommonAnimationExt, ContextMenu, Divider, GradientFade, HighlightedLabel,
     KeyBinding, PopoverMenu, PopoverMenuHandle, ProjectEmptyState, ScrollAxes, Scrollbars, Tab,
-    ThreadItem, ThreadItemWorktreeInfo, TintColor, Tooltip, WithScrollbar, prelude::*,
-    render_modifiers,
+    ThreadItem, ThreadItemCiStatus, ThreadItemPrInfo, ThreadItemWorktreeInfo, TintColor, Tooltip,
+    WithScrollbar, prelude::*, render_modifiers,
 };
 use util::ResultExt as _;
 use util::path_list::PathList;
@@ -237,6 +238,7 @@ struct ThreadEntry {
     worktrees: Vec<ThreadItemWorktreeInfo>,
     diff_stats: DiffStats,
     message_preview: Option<SharedString>,
+    pr_info: Option<ThreadItemPrInfo>,
 }
 
 #[derive(Clone)]
@@ -710,6 +712,14 @@ impl Sidebar {
             },
         )
         .detach();
+
+        pr_info_store::PrInfoStore::init(cx);
+        if let Some(pr_store) = pr_info_store::PrInfoStore::try_global(cx) {
+            cx.observe(&pr_store, |this, _store, cx| {
+                this.update_entries(cx);
+            })
+            .detach();
+        }
 
         let deferred_multi_workspace = multi_workspace.downgrade();
         cx.defer_in(window, move |this, window, cx| {
@@ -1247,6 +1257,7 @@ impl Sidebar {
             all_paths.into_iter().zip(path_details).collect();
 
         let mut branch_by_path: HashMap<PathBuf, SharedString> = HashMap::new();
+        let mut remote_by_path: HashMap<PathBuf, String> = HashMap::new();
         for ws in &workspaces {
             let project = ws.read(cx).project().read(cx);
             for repo in project.repositories(cx).values() {
@@ -1255,6 +1266,16 @@ impl Sidebar {
                     branch_by_path.insert(
                         snapshot.work_directory_abs_path.to_path_buf(),
                         SharedString::from(Arc::<str>::from(branch.name())),
+                    );
+                }
+                if let Some(remote_url) = snapshot
+                    .remote_upstream_url
+                    .clone()
+                    .or(snapshot.remote_origin_url.clone())
+                {
+                    remote_by_path.insert(
+                        snapshot.work_directory_abs_path.to_path_buf(),
+                        remote_url,
                     );
                 }
                 for linked_wt in snapshot.linked_worktrees() {
@@ -1422,6 +1443,7 @@ impl Sidebar {
                             worktrees,
                             diff_stats: DiffStats::default(),
                             message_preview: None,
+                            pr_info: None,
                         }
                     };
 
@@ -1576,6 +1598,32 @@ impl Sidebar {
                     let b_time = Self::thread_display_time(&b.metadata);
                     b_time.cmp(&a_time)
                 });
+
+                if let Some(pr_store) = pr_info_store::PrInfoStore::try_global(cx) {
+                    let store = pr_store.read(cx);
+                    for thread in &mut threads {
+                        for path in thread
+                            .metadata
+                            .worktree_paths
+                            .folder_path_list()
+                            .paths()
+                        {
+                            if let (Some(branch), Some(remote_url)) =
+                                (branch_by_path.get(path), remote_by_path.get(path))
+                            {
+                                if let Some(prs) =
+                                    lookup_pr_info(&store, remote_url, branch, cx)
+                                {
+                                    if let Some(pr) = prs.first() {
+                                        thread.pr_info =
+                                            Some(to_thread_item_pr_info(pr, remote_url, cx));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 for info in live_infos {
                     if info.status == AgentThreadStatus::Running {
@@ -1735,6 +1783,7 @@ impl Sidebar {
         let scroll_position = self.list_state.logical_scroll_top();
 
         self.rebuild_contents(cx);
+        self.trigger_pr_fetches(cx);
         self.refresh_draft_editor_observations(cx);
 
         self.list_state.reset(self.contents.entries.len());
@@ -1747,6 +1796,69 @@ impl Sidebar {
         }
 
         cx.notify();
+    }
+
+    /// Triggers background PR data fetches for threads that have a branch and
+    /// remote URL but no cached PR data yet.
+    fn trigger_pr_fetches(&mut self, cx: &mut Context<Self>) {
+        let Some(pr_store) = pr_info_store::PrInfoStore::try_global(cx) else {
+            return;
+        };
+
+        let http_client = Client::global(cx).http_client();
+
+        // Collect (remote_url, branch) pairs that need fetching.
+        let mut to_fetch: Vec<(String, String)> = Vec::new();
+        for entry in &self.contents.entries {
+            let ListEntry::Thread(thread) = entry else {
+                continue;
+            };
+            if thread.pr_info.is_some() {
+                continue;
+            }
+
+            // Build branch_by_path and remote_by_path inline by reading from
+            // workspaces, same as rebuild_contents does. We only need them for
+            // threads that are missing pr_info.
+            if let Some(mw) = self.multi_workspace.upgrade() {
+                let mw_ref = mw.read(cx);
+                for ws in mw_ref.workspaces() {
+                    let project = ws.read(cx).project().read(cx);
+                    for repo in project.repositories(cx).values() {
+                        let snapshot = repo.read(cx).snapshot();
+                        for path in thread
+                            .metadata
+                            .worktree_paths
+                            .folder_path_list()
+                            .paths()
+                        {
+                            if snapshot.work_directory_abs_path.as_ref() == path.as_path() {
+                                if let (Some(branch), Some(remote_url)) = (
+                                    &snapshot.branch,
+                                    snapshot
+                                        .remote_upstream_url
+                                        .as_ref()
+                                        .or(snapshot.remote_origin_url.as_ref()),
+                                ) {
+                                    to_fetch.push((
+                                        remote_url.clone(),
+                                        branch.name().to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !to_fetch.is_empty() {
+            pr_store.update(cx, |store, cx| {
+                for (remote_url, branch) in to_fetch {
+                    store.request_fetch(&remote_url, &branch, http_client.clone(), cx);
+                }
+            });
+        }
     }
 
     /// Re-establishes subscriptions to each visible draft's message editor
@@ -5174,6 +5286,7 @@ impl Sidebar {
             .when(thread.diff_stats.lines_removed > 0, |this| {
                 this.removed(thread.diff_stats.lines_removed as usize)
             })
+            .when_some(thread.pr_info.clone(), |this, pr| this.pr_info(pr))
             .selected(is_selected)
             .focused(is_focused)
             .hovered(is_hovered)
@@ -6782,4 +6895,69 @@ fn dump_single_workspace(workspace: &Workspace, output: &mut String, cx: &gpui::
     }
 
     writeln!(output).ok();
+}
+
+fn lookup_pr_info(
+    store: &pr_info_store::PrInfoStore,
+    remote_url: &str,
+    branch: &SharedString,
+    cx: &App,
+) -> Option<Vec<git::PullRequestInfo>> {
+    let provider_registry = git::GitHostingProviderRegistry::try_global(cx)?;
+    let (_provider, parsed) = git::parse_git_remote_url(provider_registry, remote_url)?;
+    let owner_repo = format!("{}/{}", parsed.owner, parsed.repo);
+    store.lookup(&owner_repo, branch)
+}
+
+fn to_thread_item_pr_info(
+    pr: &git::PullRequestInfo,
+    remote_url: &str,
+    cx: &App,
+) -> ThreadItemPrInfo {
+    let initials: String = pr
+        .author
+        .split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase();
+    let initials = if initials.is_empty() {
+        pr.author.chars().take(2).collect::<String>().to_uppercase()
+    } else {
+        initials
+    };
+
+    let repo_name = git::GitHostingProviderRegistry::try_global(cx)
+        .and_then(|registry| {
+            let (_provider, parsed) = git::parse_git_remote_url(registry, remote_url)?;
+            Some(format!("{}/{}", parsed.owner, parsed.repo))
+        })
+        .unwrap_or_default();
+
+    let state = match pr.state {
+        git::PrState::Open => "open",
+        git::PrState::Draft => "draft",
+        git::PrState::Closed => "closed",
+        git::PrState::Merged => "merged",
+    };
+
+    ThreadItemPrInfo {
+        number: pr.number,
+        title: pr.title.clone().into(),
+        author_initials: initials.into(),
+        author_name: pr.author.clone().into(),
+        ci_status: match pr.ci_status {
+            Some(git::CiStatus::Pass) => ThreadItemCiStatus::Pass,
+            Some(git::CiStatus::Fail) => ThreadItemCiStatus::Fail,
+            Some(git::CiStatus::Pending) => ThreadItemCiStatus::Pending,
+            None => ThreadItemCiStatus::Unknown,
+        },
+        url: pr.url.to_string().into(),
+        repo_name: repo_name.into(),
+        state: state.into(),
+        description: pr.description.as_ref().map(|d| SharedString::from(d.clone())),
+        created_at: pr.created_at.clone().into(),
+        base_branch: pr.base_branch.clone().into(),
+        head_branch: pr.head_branch.clone().into(),
+    }
 }
