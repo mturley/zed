@@ -1,3 +1,4 @@
+pub mod pr_info_store;
 mod thread_switcher;
 
 use acp_thread::{AgentThreadEntry, AssistantMessageChunk, ThreadStatus};
