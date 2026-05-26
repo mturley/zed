@@ -310,6 +310,7 @@ impl GitHostingProvider for Github {
         &self,
         remote: &ParsedGitRemote,
         branch: &str,
+        head_owner: Option<&str>,
         http_client: Arc<dyn HttpClient>,
     ) -> Result<Vec<PullRequestInfo>> {
         let Some(host) = self.base_url.host_str() else {
@@ -317,8 +318,9 @@ impl GitHostingProvider for Github {
         };
         let ParsedGitRemote { owner, repo } = remote;
         let encoded_branch = encode(branch);
+        let head_filter_owner = head_owner.unwrap_or(owner);
         let url = format!(
-            "https://api.{host}/repos/{owner}/{repo}/pulls?head={owner}:{encoded_branch}&state=open&per_page=5"
+            "https://api.{host}/repos/{owner}/{repo}/pulls?state=all&head={head_filter_owner}:{encoded_branch}&per_page=5"
         );
 
         let mut request = Request::get(&url)

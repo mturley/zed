@@ -176,6 +176,7 @@ pub trait GitHostingProvider {
         &self,
         _remote: &ParsedGitRemote,
         _branch: &str,
+        _head_owner: Option<&str>,
         _http_client: Arc<dyn HttpClient>,
     ) -> Result<Vec<PullRequestInfo>> {
         Ok(Vec::new())

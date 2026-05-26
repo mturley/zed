@@ -1285,6 +1285,13 @@ impl Sidebar {
                             SharedString::from(Arc::<str>::from(branch)),
                         );
                     }
+                    if let Some(remote_url) = snapshot
+                        .remote_upstream_url
+                        .clone()
+                        .or(snapshot.remote_origin_url.clone())
+                    {
+                        remote_by_path.insert(linked_wt.path.clone(), remote_url);
+                    }
                 }
             }
         }
@@ -1601,16 +1608,15 @@ impl Sidebar {
 
                 if let Some(pr_store) = pr_info_store::PrInfoStore::try_global(cx) {
                     let store = pr_store.read(cx);
+                    log::info!("PR linking [{label}]: {} threads, branch keys={}, remote keys={}", threads.len(), branch_by_path.len(), remote_by_path.len());
                     for thread in &mut threads {
-                        for path in thread
-                            .metadata
-                            .worktree_paths
-                            .folder_path_list()
-                            .paths()
-                        {
+                        let thread_paths: Vec<_> = thread.metadata.worktree_paths.folder_path_list().paths().to_vec();
+                        log::info!("PR linking: thread '{}' paths={:?}", thread.metadata.display_title(), thread_paths);
+                        for path in &thread_paths {
                             if let (Some(branch), Some(remote_url)) =
                                 (branch_by_path.get(path), remote_by_path.get(path))
                             {
+                                log::info!("PR linking: found branch={branch} remote={remote_url}");
                                 if let Some(prs) =
                                     lookup_pr_info(&store, remote_url, branch, cx)
                                 {
@@ -1807,8 +1813,7 @@ impl Sidebar {
 
         let http_client = Client::global(cx).http_client();
 
-        // Collect (remote_url, branch) pairs that need fetching.
-        let mut to_fetch: Vec<(String, String)> = Vec::new();
+        let mut to_fetch: Vec<(String, String, Option<String>)> = Vec::new();
         for entry in &self.contents.entries {
             let ListEntry::Thread(thread) = entry else {
                 continue;
@@ -1817,33 +1822,24 @@ impl Sidebar {
                 continue;
             }
 
-            // Build branch_by_path and remote_by_path inline by reading from
-            // workspaces, same as rebuild_contents does. We only need them for
-            // threads that are missing pr_info.
             if let Some(mw) = self.multi_workspace.upgrade() {
                 let mw_ref = mw.read(cx);
-                for ws in mw_ref.workspaces() {
+                'outer: for ws in mw_ref.workspaces() {
                     let project = ws.read(cx).project().read(cx);
                     for repo in project.repositories(cx).values() {
                         let snapshot = repo.read(cx).snapshot();
-                        for path in thread
-                            .metadata
-                            .worktree_paths
-                            .folder_path_list()
-                            .paths()
-                        {
-                            if snapshot.work_directory_abs_path.as_ref() == path.as_path() {
-                                if let (Some(branch), Some(remote_url)) = (
-                                    &snapshot.branch,
-                                    snapshot
-                                        .remote_upstream_url
-                                        .as_ref()
-                                        .or(snapshot.remote_origin_url.as_ref()),
-                                ) {
-                                    to_fetch.push((
-                                        remote_url.clone(),
-                                        branch.name().to_string(),
-                                    ));
+                        let remote_url = snapshot
+                            .remote_upstream_url
+                            .as_ref()
+                            .or(snapshot.remote_origin_url.as_ref());
+                        let branch = snapshot.branch.as_ref();
+                        if let (Some(remote_url), Some(branch)) = (remote_url, branch) {
+                            for path in thread.metadata.worktree_paths.folder_path_list().paths() {
+                                let matches_main = snapshot.work_directory_abs_path.as_ref() == path.as_path();
+                                let matches_linked = snapshot.linked_worktrees().iter().any(|wt| wt.path.as_path() == path.as_path());
+                                if matches_main || matches_linked {
+                                    to_fetch.push((remote_url.clone(), branch.name().to_string(), None));
+                                    break 'outer;
                                 }
                             }
                         }
@@ -1854,8 +1850,8 @@ impl Sidebar {
 
         if !to_fetch.is_empty() {
             pr_store.update(cx, |store, cx| {
-                for (remote_url, branch) in to_fetch {
-                    store.request_fetch(&remote_url, &branch, http_client.clone(), cx);
+                for (remote_url, branch, head_owner) in to_fetch {
+                    store.request_fetch(&remote_url, &branch, head_owner.as_deref(), http_client.clone(), cx);
                 }
             });
         }
@@ -5213,6 +5209,96 @@ impl Sidebar {
         window.focus(&focus, cx);
     }
 
+    fn lookup_pr_info_for_worktree_paths(
+        &self,
+        worktree_paths: &WorktreePaths,
+        cx: &mut Context<Self>,
+    ) -> Option<ThreadItemPrInfo> {
+        let pr_store = pr_info_store::PrInfoStore::try_global(cx)?;
+        let mw = self.multi_workspace.upgrade()?;
+
+        let mut fetch_target: Option<(String, String, Option<String>)> = None;
+        {
+            let mw_ref = mw.read(cx);
+            let provider_registry = git::GitHostingProviderRegistry::try_global(cx);
+            for ws in mw_ref.workspaces() {
+                let project = ws.read(cx).project().read(cx);
+                for repo in project.repositories(cx).values() {
+                    let snapshot = repo.read(cx).snapshot();
+                    // Use upstream URL as the repo where PRs live; fall back to origin
+                    let api_remote_url = match snapshot
+                        .remote_upstream_url
+                        .as_ref()
+                        .or(snapshot.remote_origin_url.as_ref())
+                    {
+                        Some(url) => url,
+                        None => continue,
+                    };
+                    // Derive the fork owner from the origin URL (the user's fork)
+                    let head_owner = snapshot.remote_origin_url.as_ref().and_then(|origin_url| {
+                        let registry = provider_registry.as_ref()?;
+                        let (_provider, parsed) =
+                            git::parse_git_remote_url(registry.clone(), origin_url)?;
+                        Some(parsed.owner.to_string())
+                    });
+
+                    for path in worktree_paths.folder_path_list().paths() {
+                        let matches_main =
+                            snapshot.work_directory_abs_path.as_ref() == path.as_path();
+                        let matched_linked_wt = snapshot
+                            .linked_worktrees()
+                            .iter()
+                            .find(|wt| wt.path.as_path() == path.as_path());
+
+                        let branch_name = if matches_main {
+                            snapshot.branch.as_ref().map(|b| b.name().to_string())
+                        } else if let Some(wt) = matched_linked_wt {
+                            wt.branch_name().map(|s| s.to_string())
+                        } else {
+                            None
+                        };
+
+                        if let Some(branch_name) = branch_name {
+                            let branch_shared =
+                                SharedString::from(Arc::<str>::from(branch_name.as_str()));
+                            let store = pr_store.read(cx);
+                            if let Some(prs) =
+                                lookup_pr_info(&store, api_remote_url, &branch_shared, cx)
+                            {
+                                if let Some(pr) = prs.first() {
+                                    return Some(to_thread_item_pr_info(
+                                        pr,
+                                        api_remote_url,
+                                        cx,
+                                    ));
+                                }
+                            }
+                            fetch_target = Some((
+                                api_remote_url.clone(),
+                                branch_name,
+                                head_owner.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((remote_url, branch_name, head_owner)) = fetch_target {
+            let http_client = Client::global(cx).http_client();
+            pr_store.update(cx, |store, cx| {
+                store.request_fetch(
+                    &remote_url,
+                    &branch_name,
+                    head_owner.as_deref(),
+                    http_client,
+                    cx,
+                );
+            });
+        }
+        None
+    }
+
     fn render_thread(
         &self,
         ix: usize,
@@ -5286,7 +5372,7 @@ impl Sidebar {
             .when(thread.diff_stats.lines_removed > 0, |this| {
                 this.removed(thread.diff_stats.lines_removed as usize)
             })
-            .when_some(thread.pr_info.clone(), |this, pr| this.pr_info(pr))
+            .when_some(self.lookup_pr_info_for_worktree_paths(&thread.metadata.worktree_paths, cx), |this, pr| this.pr_info(pr))
             .selected(is_selected)
             .focused(is_focused)
             .hovered(is_hovered)
@@ -5411,6 +5497,7 @@ impl Sidebar {
             .timestamp(timestamp)
             .notified(terminal.has_notification)
             .highlight_positions(terminal.highlight_positions.clone())
+            .when_some(self.lookup_pr_info_for_worktree_paths(&terminal.metadata.worktree_paths, cx), |this, pr| this.pr_info(pr))
             .selected(is_active)
             .focused(is_focused)
             .hovered(is_hovered)

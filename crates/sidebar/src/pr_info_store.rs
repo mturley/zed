@@ -73,6 +73,7 @@ impl PrInfoStore {
         &mut self,
         remote_url: &str,
         branch: &str,
+        head_owner: Option<&str>,
         http_client: Arc<dyn HttpClient>,
         cx: &mut Context<Self>,
     ) {
@@ -104,6 +105,7 @@ impl PrInfoStore {
         self.pending.insert(key.clone(), ());
 
         let branch_owned = branch.to_string();
+        let head_owner_owned = head_owner.map(|s| s.to_string());
         let remote_for_fetch = ParsedGitRemote {
             owner: parsed_remote.owner.clone(),
             repo: parsed_remote.repo.clone(),
@@ -116,6 +118,7 @@ impl PrInfoStore {
                         .pull_requests_for_branch(
                             &remote_for_fetch,
                             &branch_owned,
+                            head_owner_owned.as_deref(),
                             http_client,
                         )
                         .await
@@ -126,6 +129,7 @@ impl PrInfoStore {
                 store.pending.remove(&key);
                 match result {
                     Ok(pull_requests) => {
+                        log::info!("PR fetch: got {} PRs for {:?}", pull_requests.len(), key);
                         store.cache.insert(
                             key,
                             CacheEntry {
@@ -136,7 +140,7 @@ impl PrInfoStore {
                         cx.notify();
                     }
                     Err(err) => {
-                        warn!("Failed to fetch pull requests: {err:#}");
+                        log::warn!("PR fetch: failed for {:?}: {err:#}", key);
                     }
                 }
             })
