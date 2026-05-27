@@ -13,7 +13,7 @@ use urlencoding::encode;
 
 use git::{
     BuildCommitPermalinkParams, BuildPermalinkParams, GitHostingProvider, ParsedGitRemote,
-    PullRequest, RemoteUrl,
+    PrLabel, PrState, PullRequest, PullRequestInfo, RemoteUrl,
 };
 
 use crate::get_host_from_git_remote_url;
@@ -60,6 +60,40 @@ struct User {
     )]
     pub id: u64,
     pub avatar_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestUser {
+    pub login: String,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestRef {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubLabel {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequest {
+    pub number: u32,
+    pub html_url: String,
+    pub title: String,
+    pub state: String,
+    pub draft: Option<bool>,
+    pub merged_at: Option<String>,
+    pub user: GithubPullRequestUser,
+    pub body: Option<String>,
+    pub created_at: String,
+    pub base: GithubPullRequestRef,
+    pub head: GithubPullRequestRef,
+    pub labels: Vec<GithubLabel>,
 }
 
 #[derive(Debug)]
@@ -270,6 +304,102 @@ impl GitHostingProvider for Github {
         url.set_path(&path);
 
         Some(PullRequest { number, url })
+    }
+
+    async fn pull_requests_for_branch(
+        &self,
+        remote: &ParsedGitRemote,
+        branch: &str,
+        head_owner: Option<&str>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Result<Vec<PullRequestInfo>> {
+        let Some(host) = self.base_url.host_str() else {
+            bail!("failed to get host from github base url");
+        };
+        let ParsedGitRemote { owner, repo } = remote;
+        let encoded_branch = encode(branch);
+        let head_filter_owner = head_owner.unwrap_or(owner);
+        let url = format!(
+            "https://api.{host}/repos/{owner}/{repo}/pulls?state=all&head={head_filter_owner}:{encoded_branch}&per_page=5"
+        );
+
+        let mut request = Request::get(&url)
+            .header("Content-Type", "application/json")
+            .follow_redirects(http_client::RedirectPolicy::FollowAll);
+
+        if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
+            request = request.header("Authorization", format!("Bearer {}", github_token));
+        }
+
+        let mut response = http_client
+            .send(request.body(AsyncBody::default())?)
+            .await
+            .with_context(|| {
+                format!("error fetching GitHub pull requests at {:?}", url)
+            })?;
+
+        let mut body = Vec::new();
+        response.body_mut().read_to_end(&mut body).await?;
+
+        if response.status().is_client_error() {
+            let text = String::from_utf8_lossy(body.as_slice());
+            bail!(
+                "status error {}, response: {text:?}",
+                response.status().as_u16()
+            );
+        }
+
+        let body_str = std::str::from_utf8(&body)?;
+        let github_prs: Vec<GithubPullRequest> = serde_json::from_str(body_str)
+            .context("failed to deserialize GitHub pull requests")?;
+
+        let mut results = Vec::new();
+        for pr in github_prs {
+            let pr_url = Url::parse(&pr.html_url)
+                .context("failed to parse pull request URL")?;
+
+            let state = if pr.merged_at.is_some() {
+                PrState::Merged
+            } else if pr.draft.unwrap_or(false) {
+                PrState::Draft
+            } else if pr.state == "closed" {
+                PrState::Closed
+            } else {
+                PrState::Open
+            };
+
+            let author_avatar_url = pr
+                .user
+                .avatar_url
+                .as_deref()
+                .and_then(|url_str| Url::parse(url_str).ok());
+
+            let labels = pr
+                .labels
+                .into_iter()
+                .map(|label| PrLabel {
+                    name: label.name,
+                    color: label.color,
+                })
+                .collect();
+
+            results.push(PullRequestInfo {
+                number: pr.number,
+                url: pr_url,
+                title: pr.title,
+                state,
+                author: pr.user.login,
+                author_avatar_url,
+                description: pr.body,
+                created_at: pr.created_at,
+                base_branch: pr.base.ref_name,
+                head_branch: pr.head.ref_name,
+                labels,
+                ci_status: None,
+            });
+        }
+
+        Ok(results)
     }
 
     async fn commit_author_avatar_url(

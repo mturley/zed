@@ -1114,6 +1114,8 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 highlight_positions: Vec::new(),
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
+                message_preview: None,
+                pr_info: None,
             })),
             // Active thread with Running status
             ListEntry::Thread(Arc::new(ThreadEntry {
@@ -1141,6 +1143,8 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 highlight_positions: Vec::new(),
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
+                message_preview: None,
+                pr_info: None,
             })),
             // Active thread with Error status
             ListEntry::Thread(Arc::new(ThreadEntry {
@@ -1168,6 +1172,8 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 highlight_positions: Vec::new(),
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
+                message_preview: None,
+                pr_info: None,
             })),
             // Thread with WaitingForConfirmation status, not active
             // remote_connection: None,
@@ -1196,6 +1202,8 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 highlight_positions: Vec::new(),
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
+                message_preview: None,
+                pr_info: None,
             })),
             // Background thread that completed (should show notification)
             // remote_connection: None,
@@ -1224,6 +1232,8 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
                 highlight_positions: Vec::new(),
                 worktrees: Vec::new(),
                 diff_stats: DiffStats::default(),
+                message_preview: None,
+                pr_info: None,
             })),
             // Collapsed project header
             ListEntry::ProjectHeader {
