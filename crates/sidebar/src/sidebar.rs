@@ -7008,7 +7008,7 @@ fn to_thread_item_pr_info(
         .take(2)
         .collect::<String>()
         .to_uppercase();
-    let initials = if initials.is_empty() {
+    let initials = if initials.len() < 2 {
         pr.author.chars().take(2).collect::<String>().to_uppercase()
     } else {
         initials
@@ -7043,8 +7043,21 @@ fn to_thread_item_pr_info(
         repo_name: repo_name.into(),
         state: state.into(),
         description: pr.description.as_ref().map(|d| SharedString::from(d.clone())),
-        created_at: pr.created_at.clone().into(),
+        created_at: {
+            let formatted = chrono::DateTime::parse_from_rfc3339(&pr.created_at)
+                .map(|dt| dt.format("%b %-d").to_string())
+                .unwrap_or_else(|_| pr.created_at.clone());
+            SharedString::from(formatted)
+        },
         base_branch: pr.base_branch.clone().into(),
         head_branch: pr.head_branch.clone().into(),
+        labels: pr
+            .labels
+            .iter()
+            .map(|l| ui::ThreadItemPrLabel {
+                name: l.name.clone().into(),
+                color: l.color.clone().into(),
+            })
+            .collect(),
     }
 }

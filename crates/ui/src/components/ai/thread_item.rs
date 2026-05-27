@@ -1,11 +1,45 @@
 use crate::{CommonAnimationExt, DiffStat, GradientFade, HighlightedLabel, Tooltip, prelude::*};
 
 use gpui::{
-    Animation, AnimationExt, ClickEvent, FontWeight, Hsla, MouseButton, SharedString,
+    Animation, AnimationExt, ClickEvent, FontWeight, Hsla, MouseButton, SharedString, hsla,
     pulsating_between,
 };
 use itertools::Itertools as _;
 use std::{path::PathBuf, sync::Arc, time::Duration};
+
+fn parse_hex_color(hex: &str) -> Hsla {
+    let hex = hex.trim_start_matches('#');
+    let r = u8::from_str_radix(&hex.get(0..2).unwrap_or("80"), 16).unwrap_or(128);
+    let g = u8::from_str_radix(&hex.get(2..4).unwrap_or("80"), 16).unwrap_or(128);
+    let b = u8::from_str_radix(&hex.get(4..6).unwrap_or("80"), 16).unwrap_or(128);
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < f32::EPSILON {
+        return hsla(0.0, 0.0, l, 1.0);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if (max - rf).abs() < f32::EPSILON {
+        let mut h = (gf - bf) / d;
+        if gf < bf {
+            h += 6.0;
+        }
+        h
+    } else if (max - gf).abs() < f32::EPSILON {
+        (bf - rf) / d + 2.0
+    } else {
+        (rf - gf) / d + 4.0
+    };
+    hsla(h / 6.0, s, l, 1.0)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AgentThreadStatus {
@@ -33,6 +67,12 @@ pub enum ThreadItemCiStatus {
 }
 
 #[derive(Clone, Debug)]
+pub struct ThreadItemPrLabel {
+    pub name: SharedString,
+    pub color: SharedString,
+}
+
+#[derive(Clone, Debug)]
 pub struct ThreadItemPrInfo {
     pub number: u32,
     pub title: SharedString,
@@ -46,6 +86,7 @@ pub struct ThreadItemPrInfo {
     pub created_at: SharedString,
     pub base_branch: SharedString,
     pub head_branch: SharedString,
+    pub labels: Vec<ThreadItemPrLabel>,
 }
 
 #[derive(Clone, Default)]
@@ -536,65 +577,152 @@ impl RenderOnce for ThreadItem {
                                         )
                                 )
                                 .tooltip(Tooltip::element(move |_window, cx| {
-                                    let state_color = if pr_data.state == "Draft" {
-                                        Color::Muted
-                                    } else {
-                                        Color::Success
+                                    let state_color = match pr_data.state.as_ref() {
+                                        "open" => Color::Success,
+                                        "closed" => Color::Error,
+                                        "merged" => Color::Custom(hsla(280.0 / 360.0, 0.6, 0.65, 1.0)),
+                                        _ => Color::Muted,
+                                    };
+                                    let state_icon = match pr_data.state.as_ref() {
+                                        "open" => IconName::PullRequest,
+                                        "merged" => IconName::PullRequest,
+                                        "closed" => IconName::PullRequest,
+                                        _ => IconName::PullRequest,
+                                    };
+
+                                    let desc_truncated = pr_data.description.as_ref().map(|d| {
+                                        let s = d.trim().replace('\n', " ");
+                                        if s.len() > 200 {
+                                            SharedString::from(format!("{}…", &s[..s.floor_char_boundary(200)]))
+                                        } else {
+                                            SharedString::from(s)
+                                        }
+                                    });
+
+                                    let state_label = match pr_data.state.as_ref() {
+                                        "open" => "Open",
+                                        "closed" => "Closed",
+                                        "merged" => "Merged",
+                                        "draft" => "Draft",
+                                        other => other,
                                     };
 
                                     v_flex()
                                         .max_w(px(350.0))
+                                        .overflow_hidden()
                                         .gap_1()
-                                        .child(
-                                            Label::new(pr_data.repo_name.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted)
-                                        )
+                                        // Repo name + date
                                         .child(
                                             h_flex()
                                                 .gap_1()
                                                 .child(
-                                                    Label::new(pr_data.title.clone())
-                                                        .weight(FontWeight::SEMIBOLD)
+                                                    Label::new(pr_data.repo_name.clone())
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
                                                 )
                                                 .child(
-                                                    Label::new(format!("#{}", pr_data.number))
+                                                    Label::new(format!("on {}", pr_data.created_at))
+                                                        .size(LabelSize::Small)
                                                         .color(Color::Muted)
                                                 )
                                         )
+                                        // Title + number
                                         .child(
-                                            Label::new(pr_data.state.clone())
-                                                .size(LabelSize::Small)
-                                                .color(state_color)
+                                            Label::new(format!("{} #{}", pr_data.title, pr_data.number))
+                                                .weight(FontWeight::SEMIBOLD)
                                         )
-                                        .when_some(pr_data.description.clone(), |this, desc| {
+                                        // State badge
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .child(
+                                                    Icon::new(state_icon)
+                                                        .size(IconSize::XSmall)
+                                                        .color(state_color)
+                                                )
+                                                .child(
+                                                    Label::new(state_label)
+                                                        .size(LabelSize::Small)
+                                                        .color(state_color)
+                                                )
+                                        )
+                                        // Description
+                                        .when_some(desc_truncated, |this, desc| {
                                             this.child(
                                                 Label::new(desc)
                                                     .size(LabelSize::Small)
                                                     .color(Color::Muted)
                                             )
                                         })
+                                        // Base ← head branches
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .overflow_hidden()
+                                                .child(
+                                                    Label::new(pr_data.base_branch.clone())
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Accent)
+                                                        .truncate()
+                                                )
+                                                .child(
+                                                    Label::new("←")
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
+                                                        .flex_shrink_0()
+                                                )
+                                                .child(
+                                                    Label::new(pr_data.head_branch.clone())
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Accent)
+                                                        .truncate()
+                                                )
+                                        )
+                                        // Labels
+                                        .when(!pr_data.labels.is_empty(), |this| {
+                                            this.child(
+                                                h_flex()
+                                                    .gap_0p5()
+                                                    .flex_wrap()
+                                                    .children(pr_data.labels.iter().map(|label| {
+                                                        let label_color = parse_hex_color(&label.color);
+                                                        div()
+                                                            .rounded_sm()
+                                                            .px_1()
+                                                            .py_0p5()
+                                                            .bg(label_color.opacity(0.2))
+                                                            .child(
+                                                                Label::new(label.name.clone())
+                                                                    .size(LabelSize::XSmall)
+                                                                    .color(Color::Custom(label_color))
+                                                            )
+                                                    }))
+                                            )
+                                        })
+                                        // Author
                                         .child(
                                             h_flex()
                                                 .gap_1()
                                                 .child(
-                                                    Label::new(pr_data.author_name.clone())
-                                                        .size(LabelSize::Small)
+                                                    div()
+                                                        .rounded_full()
+                                                        .size_4()
+                                                        .flex_shrink_0()
+                                                        .bg(cx.theme().colors().element_background)
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .child(
+                                                            Label::new(pr_data.author_initials.clone())
+                                                                .size(LabelSize::XSmall)
+                                                                .color(Color::Muted)
+                                                        )
                                                 )
                                                 .child(
-                                                    Label::new("·")
+                                                    Label::new(pr_data.author_name.clone())
                                                         .size(LabelSize::Small)
                                                         .color(Color::Muted)
                                                 )
-                                                .child(
-                                                    Label::new(pr_data.created_at.clone())
-                                                        .size(LabelSize::Small)
-                                                )
-                                        )
-                                        .child(
-                                            Label::new(format!("{} ← {}", pr_data.base_branch, pr_data.head_branch))
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted)
                                         )
                                         .into_any_element()
                                 }))
