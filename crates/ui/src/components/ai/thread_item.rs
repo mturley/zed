@@ -1,4 +1,4 @@
-use crate::{CommonAnimationExt, DiffStat, GradientFade, HighlightedLabel, Tooltip, prelude::*};
+use crate::{Avatar, CommonAnimationExt, DiffStat, GradientFade, HighlightedLabel, Tooltip, prelude::*};
 
 use gpui::{
     Animation, AnimationExt, ClickEvent, FontWeight, Hsla, MouseButton, SharedString, hsla,
@@ -87,6 +87,7 @@ pub struct ThreadItemPrInfo {
     pub base_branch: SharedString,
     pub head_branch: SharedString,
     pub labels: Vec<ThreadItemPrLabel>,
+    pub author_avatar_url: Option<SharedString>,
 }
 
 #[derive(Clone, Default)]
@@ -686,15 +687,19 @@ impl RenderOnce for ThreadItem {
                                                     .flex_wrap()
                                                     .children(pr_data.labels.iter().map(|label| {
                                                         let label_color = parse_hex_color(&label.color);
+                                                        let bg = label_color.opacity(0.15);
+                                                        let border = label_color.opacity(0.4);
                                                         div()
-                                                            .rounded_sm()
+                                                            .rounded_md()
                                                             .px_1()
                                                             .py_0p5()
-                                                            .bg(label_color.opacity(0.2))
+                                                            .bg(bg)
+                                                            .border_1()
+                                                            .border_color(border)
                                                             .child(
                                                                 Label::new(label.name.clone())
                                                                     .size(LabelSize::XSmall)
-                                                                    .color(Color::Custom(label_color))
+                                                                    .color(Color::Default)
                                                             )
                                                     }))
                                             )
@@ -703,21 +708,29 @@ impl RenderOnce for ThreadItem {
                                         .child(
                                             h_flex()
                                                 .gap_1()
-                                                .child(
-                                                    div()
-                                                        .rounded_full()
-                                                        .size_4()
-                                                        .flex_shrink_0()
-                                                        .bg(cx.theme().colors().element_background)
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .child(
-                                                            Label::new(pr_data.author_initials.clone())
-                                                                .size(LabelSize::XSmall)
-                                                                .color(Color::Muted)
-                                                        )
-                                                )
+                                                .when_some(pr_data.author_avatar_url.clone(), |this, url| {
+                                                    this.child(
+                                                        Avatar::new(url.to_string())
+                                                            .size(px(16.0))
+                                                    )
+                                                })
+                                                .when(pr_data.author_avatar_url.is_none(), |this| {
+                                                    this.child(
+                                                        div()
+                                                            .rounded_full()
+                                                            .size_4()
+                                                            .flex_shrink_0()
+                                                            .bg(cx.theme().colors().element_background)
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .child(
+                                                                Label::new(pr_data.author_initials.clone())
+                                                                    .size(LabelSize::XSmall)
+                                                                    .color(Color::Muted)
+                                                            )
+                                                    )
+                                                })
                                                 .child(
                                                     Label::new(pr_data.author_name.clone())
                                                         .size(LabelSize::Small)

@@ -7088,6 +7088,7 @@ fn to_thread_item_pr_info(
         },
         base_branch: pr.base_branch.clone().into(),
         head_branch: pr.head_branch.clone().into(),
+        author_avatar_url: pr.author_avatar_url.as_ref().map(|u| SharedString::from(u.to_string())),
         labels: pr
             .labels
             .iter()
