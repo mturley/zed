@@ -540,6 +540,16 @@ impl RenderOnce for ThreadItem {
             .when_some(self.pr_info, |this, pr| {
                 let pr_url = pr.url.clone();
                 let pr_data = pr.clone();
+                let pr_icon = match pr.state.as_ref() {
+                    "merged" => IconName::PullRequestMerged,
+                    "closed" => IconName::PullRequestClosed,
+                    _ => IconName::PullRequest,
+                };
+                let pr_row_color = match pr.state.as_ref() {
+                    "merged" => Color::Custom(hsla(280.0 / 360.0, 0.6, 0.65, 1.0)),
+                    "closed" => Color::Error,
+                    _ => Color::Accent,
+                };
                 this.child(
                     h_flex()
                         .gap_1p5()
@@ -556,14 +566,14 @@ impl RenderOnce for ThreadItem {
                                     h_flex()
                                         .gap_1()
                                         .child(
-                                            Icon::new(IconName::PullRequest)
+                                            Icon::new(pr_icon)
                                                 .size(IconSize::XSmall)
-                                                .color(Color::Accent)
+                                                .color(pr_row_color)
                                         )
                                         .child(
                                             Label::new(format!("#{}", pr.number))
                                                 .size(LabelSize::Small)
-                                                .color(Color::Accent)
+                                                .color(pr_row_color)
                                         )
                                         .child(
                                             Label::new(pr.title.clone())
@@ -585,9 +595,8 @@ impl RenderOnce for ThreadItem {
                                         _ => Color::Muted,
                                     };
                                     let state_icon = match pr_data.state.as_ref() {
-                                        "open" => IconName::PullRequest,
-                                        "merged" => IconName::PullRequest,
-                                        "closed" => IconName::PullRequest,
+                                        "merged" => IconName::PullRequestMerged,
+                                        "closed" => IconName::PullRequestClosed,
                                         _ => IconName::PullRequest,
                                     };
 
@@ -632,10 +641,38 @@ impl RenderOnce for ThreadItem {
                                             Label::new(format!("{} #{}", pr_data.title, pr_data.number))
                                                 .weight(FontWeight::SEMIBOLD)
                                         )
-                                        // State badge
+                                        // Author + state badge
                                         .child(
                                             h_flex()
                                                 .gap_1()
+                                                .when_some(pr_data.author_avatar_url.clone(), |this, url| {
+                                                    this.child(
+                                                        Avatar::new(url.to_string())
+                                                            .size(px(16.0))
+                                                    )
+                                                })
+                                                .when(pr_data.author_avatar_url.is_none(), |this| {
+                                                    this.child(
+                                                        div()
+                                                            .rounded_full()
+                                                            .size_4()
+                                                            .flex_shrink_0()
+                                                            .bg(cx.theme().colors().element_background)
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .child(
+                                                                Label::new(pr_data.author_initials.clone())
+                                                                    .size(LabelSize::XSmall)
+                                                                    .color(Color::Muted)
+                                                            )
+                                                    )
+                                                })
+                                                .child(
+                                                    Label::new(pr_data.author_name.clone())
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
+                                                )
                                                 .child(
                                                     Icon::new(state_icon)
                                                         .size(IconSize::XSmall)
@@ -704,39 +741,6 @@ impl RenderOnce for ThreadItem {
                                                     }))
                                             )
                                         })
-                                        // Author
-                                        .child(
-                                            h_flex()
-                                                .gap_1()
-                                                .when_some(pr_data.author_avatar_url.clone(), |this, url| {
-                                                    this.child(
-                                                        Avatar::new(url.to_string())
-                                                            .size(px(16.0))
-                                                    )
-                                                })
-                                                .when(pr_data.author_avatar_url.is_none(), |this| {
-                                                    this.child(
-                                                        div()
-                                                            .rounded_full()
-                                                            .size_4()
-                                                            .flex_shrink_0()
-                                                            .bg(cx.theme().colors().element_background)
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .child(
-                                                                Label::new(pr_data.author_initials.clone())
-                                                                    .size(LabelSize::XSmall)
-                                                                    .color(Color::Muted)
-                                                            )
-                                                    )
-                                                })
-                                                .child(
-                                                    Label::new(pr_data.author_name.clone())
-                                                        .size(LabelSize::Small)
-                                                        .color(Color::Muted)
-                                                )
-                                        )
                                         .into_any_element()
                                 }))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {

@@ -198,6 +198,8 @@ pub enum IconName {
     Power,
     Public,
     PullRequest,
+    PullRequestClosed,
+    PullRequestMerged,
     QueueMessage,
     Quote,
     Reader,
