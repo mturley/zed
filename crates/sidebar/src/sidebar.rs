@@ -5234,13 +5234,14 @@ impl Sidebar {
                         Some(url) => url,
                         None => continue,
                     };
-                    // Derive the fork owner from the origin URL (the user's fork)
-                    let head_owner = snapshot.remote_origin_url.as_ref().and_then(|origin_url| {
-                        let registry = provider_registry.as_ref()?;
-                        let (_provider, parsed) =
-                            git::parse_git_remote_url(registry.clone(), origin_url)?;
-                        Some(parsed.owner.to_string())
-                    });
+                    // Default fork owner from origin URL (the user's fork)
+                    let default_head_owner =
+                        snapshot.remote_origin_url.as_ref().and_then(|origin_url| {
+                            let registry = provider_registry.as_ref()?;
+                            let (_provider, parsed) =
+                                git::parse_git_remote_url(registry.clone(), origin_url)?;
+                            Some(parsed.owner.to_string())
+                        });
 
                     for path in worktree_paths.folder_path_list().paths() {
                         let matches_main =
@@ -5250,7 +5251,8 @@ impl Sidebar {
                             .iter()
                             .find(|wt| wt.path.as_path() == path.as_path());
 
-                        let branch_name = if matches_main {
+                        // Get the local branch name for this worktree
+                        let local_branch_name = if matches_main {
                             snapshot.branch.as_ref().map(|b| b.name().to_string())
                         } else if let Some(wt) = matched_linked_wt {
                             wt.branch_name().map(|s| s.to_string())
@@ -5258,27 +5260,62 @@ impl Sidebar {
                             None
                         };
 
-                        if let Some(branch_name) = branch_name {
-                            let branch_shared =
-                                SharedString::from(Arc::<str>::from(branch_name.as_str()));
-                            let store = pr_store.read(cx);
-                            if let Some(prs) =
-                                lookup_pr_info(&store, api_remote_url, &branch_shared, cx)
+                        let Some(local_branch_name) = local_branch_name else {
+                            continue;
+                        };
+
+                        // Look up the branch in branch_list to get upstream tracking info.
+                        // If the branch tracks a remote, use the upstream branch name and
+                        // derive the fork owner from the tracking remote's URL.
+                        let branch_info = snapshot.branch_list.iter().find(|b| {
+                            b.name() == local_branch_name
+                        });
+                        let (pr_branch_name, head_owner) =
+                            if let Some(upstream) =
+                                branch_info.and_then(|b| b.upstream.as_ref())
                             {
-                                if let Some(pr) = prs.first() {
-                                    return Some(to_thread_item_pr_info(
-                                        pr,
-                                        api_remote_url,
-                                        cx,
-                                    ));
-                                }
+                                let upstream_branch = upstream
+                                    .branch_name()
+                                    .unwrap_or(&local_branch_name)
+                                    .to_string();
+                                let upstream_remote = upstream.remote_name();
+                                // Try to get the fork owner from the tracking remote's URL
+                                let fork_owner = upstream_remote.and_then(|remote_name| {
+                                    // The remote_name is e.g. "Philip-Carneiro" or "origin".
+                                    // We can't easily get the URL for an arbitrary remote from
+                                    // the snapshot. But the remote name in a fork workflow is
+                                    // typically the GitHub username itself.
+                                    // If it's "origin", use the default_head_owner.
+                                    if remote_name == "origin" || remote_name == "upstream" {
+                                        default_head_owner.clone()
+                                    } else {
+                                        Some(remote_name.to_string())
+                                    }
+                                });
+                                (upstream_branch, fork_owner.or(default_head_owner.clone()))
+                            } else {
+                                (local_branch_name, default_head_owner.clone())
+                            };
+
+                        let branch_shared =
+                            SharedString::from(Arc::<str>::from(pr_branch_name.as_str()));
+                        let store = pr_store.read(cx);
+                        if let Some(prs) =
+                            lookup_pr_info(&store, api_remote_url, &branch_shared, cx)
+                        {
+                            if let Some(pr) = prs.first() {
+                                return Some(to_thread_item_pr_info(
+                                    pr,
+                                    api_remote_url,
+                                    cx,
+                                ));
                             }
-                            fetch_target = Some((
-                                api_remote_url.clone(),
-                                branch_name,
-                                head_owner.clone(),
-                            ));
                         }
+                        fetch_target = Some((
+                            api_remote_url.clone(),
+                            pr_branch_name,
+                            head_owner,
+                        ));
                     }
                 }
             }
